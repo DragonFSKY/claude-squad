@@ -209,9 +209,27 @@ func (t *TmuxSession) IsCliReady() bool {
 	}
 }
 
+// cliHasReadyDetection reports whether IsCliReady can detect the ready state of the
+// configured program. CLIs without a known ready pattern rely on the content
+// stability fallback in WaitForCliReady.
+func (t *TmuxSession) cliHasReadyDetection() bool {
+	switch {
+	case strings.HasSuffix(t.program, ProgramClaude):
+		return true
+	case strings.HasPrefix(t.program, ProgramAider):
+		return true
+	case strings.HasPrefix(t.program, ProgramGemini):
+		return true
+	case strings.HasPrefix(t.program, ProgramCodex):
+		return true
+	default:
+		return false
+	}
+}
+
 // WaitForCliReady polls until the CLI is ready for input or the timeout expires.
-// It first checks known CLI prompt patterns via IsCliReady, then falls back to
-// content stability detection for unknown CLIs.
+// It first checks known CLI prompt patterns via IsCliReady, and only for CLIs
+// without a known ready pattern it falls back to content stability detection.
 // Returns true if the CLI became ready, false on timeout.
 func (t *TmuxSession) WaitForCliReady(timeout time.Duration) bool {
 	deadline := time.After(timeout)
@@ -232,18 +250,22 @@ func (t *TmuxSession) WaitForCliReady(timeout time.Duration) bool {
 			return true
 		}
 
-		// Fallback: detect content stability (content not changing)
-		content, err := t.CapturePaneContent()
-		if err == nil && content != "" && content == prevContent {
-			stableCount++
-			if stableCount >= stableThreshold {
-				log.InfoLog.Printf("WaitForCliReady: content stable for %s, assuming ready", t.program)
-				return true
-			}
-		} else {
-			stableCount = 0
-			if err == nil {
-				prevContent = content
+		// Fallback: detect content stability (content not changing). A known CLI must
+		// not use it, since a static startup screen would otherwise be mistaken for a
+		// ready prompt.
+		if !t.cliHasReadyDetection() {
+			content, err := t.CapturePaneContent()
+			if err == nil && content != "" && content == prevContent {
+				stableCount++
+				if stableCount >= stableThreshold {
+					log.InfoLog.Printf("WaitForCliReady: content stable for %s, assuming ready", t.program)
+					return true
+				}
+			} else {
+				stableCount = 0
+				if err == nil {
+					prevContent = content
+				}
 			}
 		}
 

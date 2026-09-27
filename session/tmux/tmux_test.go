@@ -9,11 +9,21 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"claude-squad/cmd/cmd_test"
+	"claude-squad/log"
 
 	"github.com/stretchr/testify/require"
 )
+
+// TestMain runs before all tests to set up the test environment.
+func TestMain(m *testing.M) {
+	log.Initialize(false)
+	defer log.Close()
+
+	os.Exit(m.Run())
+}
 
 type MockPtyFactory struct {
 	t *testing.T
@@ -85,4 +95,53 @@ func TestStartTmuxSession(t *testing.T) {
 	// File should be open
 	_, err = ptyFactory.files[1].Stat()
 	require.NoError(t, err)
+}
+
+func TestWaitForCliReadyKnownCliIgnoresStableContent(t *testing.T) {
+	ptyFactory := NewMockPtyFactory(t)
+	cmdExec := cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			return nil
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			// Static startup screen of a known CLI, without a ready prompt.
+			return []byte("Claude Code is starting...\nLoading plugins"), nil
+		},
+	}
+
+	session := newTmuxSession("test-session", "claude", ptyFactory, cmdExec)
+
+	require.False(t, session.WaitForCliReady(1500*time.Millisecond))
+}
+
+func TestWaitForCliReadyKnownCliDetectsReadyPrompt(t *testing.T) {
+	ptyFactory := NewMockPtyFactory(t)
+	cmdExec := cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			return nil
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			return []byte("Claude Code\n❯ "), nil
+		},
+	}
+
+	session := newTmuxSession("test-session", "claude", ptyFactory, cmdExec)
+
+	require.True(t, session.WaitForCliReady(2*time.Second))
+}
+
+func TestWaitForCliReadyUnknownCliFallsBackToStableContent(t *testing.T) {
+	ptyFactory := NewMockPtyFactory(t)
+	cmdExec := cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			return nil
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			return []byte("my-cli is starting...\nLoading"), nil
+		},
+	}
+
+	session := newTmuxSession("test-session", "my-cli", ptyFactory, cmdExec)
+
+	require.True(t, session.WaitForCliReady(3*time.Second))
 }

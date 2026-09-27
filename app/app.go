@@ -295,9 +295,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				msg.instance.Prompt = ""
 				instance := msg.instance
 				cmds = append(cmds, func() tea.Msg {
-					instance.WaitForCliReady(30 * time.Second)
+					if !instance.WaitForCliReady(30 * time.Second) {
+						return promptNotSentMsg{
+							instance: instance,
+							prompt:   prompt,
+							err:      fmt.Errorf("prompt not sent: CLI did not become ready"),
+						}
+					}
 					if err := instance.SendPrompt(prompt); err != nil {
-						log.ErrorLog.Printf("failed to send prompt: %v", err)
+						return promptNotSentMsg{instance: instance, prompt: prompt, err: err}
 					}
 					return nil
 				})
@@ -308,6 +314,11 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
+	case promptNotSentMsg:
+		// The prompt was not sent: keep it on the instance so it is not lost and
+		// tell the user about the failure.
+		msg.instance.Prompt = msg.prompt
+		return m, m.handleError(msg.err)
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -821,6 +832,14 @@ type instanceStartedMsg struct {
 	err             error
 	promptAfterName bool
 	selectedBranch  string
+}
+
+// promptNotSentMsg reports that a pending prompt was not sent, so that its
+// content can be restored and the user informed.
+type promptNotSentMsg struct {
+	instance *session.Instance
+	prompt   string
+	err      error
 }
 
 // branchSearchDebounceMsg fires after the debounce interval to trigger a search.
